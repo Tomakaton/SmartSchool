@@ -8,4 +8,5 @@ public class User
     public DateTime DateCreated { get; set; }
 
     public ICollection<RoleAssignment> RoleAssignments { get; set; } = [];
+    public ICollection<RefreshToken> RefreshTokens { get; set; } = [];
 }
