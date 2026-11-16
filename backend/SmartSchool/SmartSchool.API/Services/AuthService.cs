@@ -21,12 +21,12 @@ public class AuthService(
         LoginRequest request,
         CancellationToken cancellationToken = default)
     {
-        var email = request.Identifier.Trim();
+        var email = request.Identifier.Trim().ToLowerInvariant();
 
         var user = await dbContext.Users
             .Include(user => user.RoleAssignments)
             .ThenInclude(roleAssignment => roleAssignment.Role)
-            .FirstOrDefaultAsync(user => EF.Functions.ILike(user.Email, email), cancellationToken);
+            .FirstOrDefaultAsync(user => user.Email.ToLower() == email, cancellationToken);
 
         if (user is null)
         {
