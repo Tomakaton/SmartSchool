@@ -7,11 +7,13 @@ using SmartSchool.API.Services;
 
 namespace SmartSchool.API.Controllers;
 
+/// <summary>Authentication endpoints: login, refresh-token rotation, and password changes.</summary>
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
 public class AuthController(IAuthService authService) : ControllerBase
 {
+    /// <summary>Authenticates a user and returns an access/refresh token pair.</summary>
     [AllowAnonymous]
     [HttpPost("login")]
     public async Task<ActionResult<LoginResponse>> Login(
@@ -28,6 +30,9 @@ public class AuthController(IAuthService authService) : ControllerBase
         return Ok(result.Value);
     }
 
+    /// <summary>
+    /// Exchanges a valid refresh token for a new token pair. The presented token is revoked.
+    /// </summary>
     [AllowAnonymous]
     [HttpPost("refresh")]
     public async Task<ActionResult<RefreshTokenResponse>> RefreshToken(
@@ -44,6 +49,9 @@ public class AuthController(IAuthService authService) : ControllerBase
         return Ok(result.Value);
     }
 
+    /// <summary>
+    /// Changes the authenticated user's password and revokes their active refresh tokens.
+    /// </summary>
     [HttpPost("change-password")]
     public async Task<ActionResult> ChangePassword(
         ChangePasswordRequest request,

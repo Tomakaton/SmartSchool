@@ -9,6 +9,10 @@ using SmartSchool.API.Options;
 
 namespace SmartSchool.API.Services;
 
+/// <summary>
+/// Verifies credentials, issues and rotates token pairs, and changes passwords.
+/// All expected failures are returned as <see cref="Result"/> values rather than exceptions.
+/// </summary>
 public class AuthService(
     ApplicationDbContext dbContext,
     ITokenService tokenService,
@@ -17,10 +21,15 @@ public class AuthService(
 {
     private readonly JwtSettings _jwtSettings = jwtSettings.Value;
 
+    /// <inheritdoc />
     public async Task<Result<LoginResponse>> LoginAsync(
         LoginRequest request,
         CancellationToken cancellationToken = default)
     {
+        // Compare lowercased values instead of using EF.Functions.ILike: ILike is Npgsql-only
+        // (unit tests run on EF InMemory) and treats the input as a LIKE pattern, so '%' and '_'
+        // in an email would act as wildcards. This does not use the Email index; add a functional
+        // index on lower("Email") if email lookups become a bottleneck.
         var email = request.Identifier.Trim().ToLowerInvariant();
 
         var user = await dbContext.Users
@@ -65,6 +74,7 @@ public class AuthService(
             refreshToken.Entity.ExpiresAt));
     }
 
+    /// <inheritdoc />
     public async Task<Result<RefreshTokenResponse>> RefreshTokenAsync(
         RefreshTokenRequest request,
         CancellationToken cancellationToken = default)
@@ -90,6 +100,7 @@ public class AuthService(
         var accessToken = CreateAccessToken(user);
         var refreshToken = CreateRefreshToken(user);
 
+        // Single-use rotation: revoke the token that was presented and link it to its replacement.
         storedToken.RevokedAt = DateTime.UtcNow;
         storedToken.ReplacedByToken = refreshToken.Entity;
 
@@ -104,6 +115,7 @@ public class AuthService(
             refreshToken.Entity.ExpiresAt));
     }
 
+    /// <inheritdoc />
     public async Task<Result> ChangePasswordAsync(
         Guid userId,
         ChangePasswordRequest request,
@@ -129,6 +141,8 @@ public class AuthService(
 
         user.PasswordHash = passwordHasher.HashPassword(user, request.NewPassword);
 
+        // Revoke every token that has not been revoked yet. This includes expired tokens because
+        // the filter only checks RevokedAt.
         var activeRefreshTokens = await dbContext.RefreshTokens
             .Where(refreshToken => refreshToken.UserId == userId && refreshToken.RevokedAt == null)
             .ToListAsync(cancellationToken);
@@ -147,6 +161,7 @@ public class AuthService(
 
     private AccessTokenResult CreateAccessToken(User user)
     {
+        // Only active roles are embedded; changing a role takes effect the next time a token is issued.
         var roles = user.RoleAssignments
             .Where(roleAssignment => roleAssignment.Role.IsActive)
             .Select(roleAssignment => roleAssignment.Role.Name);

@@ -31,6 +31,7 @@ var jwtSettings = builder.Configuration
     ?? throw new InvalidOperationException(
         $"The '{JwtSettings.SectionName}' configuration section is missing.");
 
+// HMAC-SHA256 needs at least 256 bits of key material; fail fast instead of issuing weak tokens.
 if (Encoding.UTF8.GetByteCount(jwtSettings.SigningKey) < 32)
 {
     throw new InvalidOperationException(
@@ -61,6 +62,7 @@ builder.Services
             ValidateLifetime = true,
             RequireExpirationTime = true,
             RequireSignedTokens = true,
+            // Access tokens are short-lived; allow only a small tolerance for clock differences.
             ClockSkew = TimeSpan.FromSeconds(30),
             NameClaimType = JwtRegisteredClaimNames.Email,
             RoleClaimType = ClaimTypes.Role

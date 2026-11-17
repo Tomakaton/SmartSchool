@@ -10,10 +10,15 @@ using SmartSchool.API.Options;
 
 namespace SmartSchool.API.Services;
 
+/// <summary>
+/// Creates signed JWT access tokens and opaque refresh tokens, and hashes refresh tokens
+/// so only the digest is persisted.
+/// </summary>
 public class TokenService(IOptions<JwtSettings> jwtSettings) : ITokenService
 {
     private readonly JwtSettings _jwtSettings = jwtSettings.Value;
 
+    /// <inheritdoc />
     public AccessTokenResult CreateAccessToken(User user, IEnumerable<string> roles)
     {
         var expiresAt = DateTime.UtcNow.AddMinutes(_jwtSettings.AccessTokenExpiryMinutes);
@@ -42,9 +47,13 @@ public class TokenService(IOptions<JwtSettings> jwtSettings) : ITokenService
             expiresAt);
     }
 
+    // 512 bits of cryptographic entropy, base64url-encoded so the value is safe in JSON and headers.
+    /// <inheritdoc />
     public string CreateRefreshToken() =>
         WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(64));
 
+    // The raw token is only ever returned to the client; storage keeps this digest.
+    /// <inheritdoc />
     public string HashRefreshToken(string refreshToken) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(refreshToken)));
 }
