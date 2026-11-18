@@ -62,6 +62,8 @@ dotnet user-secrets set "Jwt:SigningKey" "<at-least-32-bytes-of-random-text>" --
 | `Jwt:Audience` | No | `SmartSchool.Client` | Written to and required from access tokens |
 | `Jwt:AccessTokenExpiryMinutes` | No | `15` | Access token lifetime |
 | `Jwt:RefreshTokenExpiryDays` | No | `7` | Refresh token lifetime |
+| `Seed:PlatformAdmin:Email` | For `--seed` | – | Email of the platform admin created by the seeder |
+| `Seed:PlatformAdmin:Password` | For `--seed` | – | Initial password (min. 12 chars); never overwrites an existing account |
 
 For CI or containers, use environment variables with a double underscore, for example
 `ConnectionStrings__DefaultConnection` and `Jwt__SigningKey`.
@@ -73,6 +75,9 @@ cd backend/SmartSchool
 
 # Create/update the database schema
 dotnet ef database update --project SmartSchool.API
+
+# Seed roles and the platform admin (idempotent; exits without starting the server)
+dotnet run --project SmartSchool.API -- --seed
 
 # Start the API (http profile, http://localhost:5220)
 dotnet run --project SmartSchool.API

@@ -40,10 +40,14 @@ if (Encoding.UTF8.GetByteCount(jwtSettings.SigningKey) < 32)
 
 builder.Services.Configure<JwtSettings>(
     builder.Configuration.GetSection(JwtSettings.SectionName));
+builder.Services.Configure<SeedSettings>(
+    builder.Configuration.GetSection(SeedSettings.SectionName));
 
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<DbSeeder>();
 
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -72,6 +76,14 @@ builder.Services
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
+
+// `dotnet run -- --seed` seeds roles and the platform admin, then exits without serving requests.
+if (args.Contains(DbSeeder.CommandLineFlag))
+{
+    using var scope = app.Services.CreateScope();
+    await scope.ServiceProvider.GetRequiredService<DbSeeder>().SeedAsync();
+    return;
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
