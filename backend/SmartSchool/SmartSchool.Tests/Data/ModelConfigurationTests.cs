@@ -91,4 +91,23 @@ public class ModelConfigurationTests
 
         Assert.That(stored.ValidTo, Is.EqualTo(new DateOnly(2026, 11, 18)));
     }
+
+    [Test]
+    public void User_DefaultsToUnactivatedWithUniqueSecurityStamp()
+    {
+        var first = new User { Email = "a@example.com", PasswordHash = string.Empty };
+        var second = new User { Email = "b@example.com", PasswordHash = string.Empty };
+        var isActivatedDefault = _dbContext.Model
+            .FindEntityType(typeof(User))!
+            .FindProperty(nameof(User.IsActivated))!
+            .GetDefaultValue();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.IsActivated, Is.False);
+            Assert.That(isActivatedDefault, Is.EqualTo(false));
+            Assert.That(first.SecurityStamp, Has.Length.EqualTo(32));
+            Assert.That(second.SecurityStamp, Is.Not.EqualTo(first.SecurityStamp));
+        });
+    }
 }

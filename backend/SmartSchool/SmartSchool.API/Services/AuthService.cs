@@ -39,7 +39,19 @@ public class AuthService(
 
         if (user is null)
         {
-            return Result<LoginResponse>.Failure("Invalid email or password.");
+            return Result<LoginResponse>.Failure(
+                "Invalid email or password.",
+                ResultErrorKind.Unauthorized);
+        }
+
+        // Provisioned accounts that have not consumed a magic link yet have an empty PasswordHash;
+        // surface 403 immediately so the client can direct them to their activation email. Accounts
+        // that do hold a password hash verify the password first so wrong-password probes still get 401.
+        if (!user.IsActivated && string.IsNullOrEmpty(user.PasswordHash))
+        {
+            return Result<LoginResponse>.Failure(
+                "Account has not been activated.",
+                ResultErrorKind.Forbidden);
         }
 
         var verificationResult = passwordHasher.VerifyHashedPassword(
@@ -50,14 +62,28 @@ public class AuthService(
         switch (verificationResult)
         {
             case PasswordVerificationResult.Failed:
-                return Result<LoginResponse>.Failure("Invalid email or password.");
+                return Result<LoginResponse>.Failure(
+                    "Invalid email or password.",
+                    ResultErrorKind.Unauthorized);
             case PasswordVerificationResult.SuccessRehashNeeded:
-                user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
+                if (user.IsActivated)
+                {
+                    user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
+                }
                 break;
             case PasswordVerificationResult.Success:
                 break;
             default:
-                return Result<LoginResponse>.Failure("Invalid login attempt.");
+                return Result<LoginResponse>.Failure(
+                    "Invalid login attempt.",
+                    ResultErrorKind.Unauthorized);
+        }
+
+        if (!user.IsActivated)
+        {
+            return Result<LoginResponse>.Failure(
+                "Account has not been activated.",
+                ResultErrorKind.Forbidden);
         }
 
         var accessToken = CreateAccessToken(user);
@@ -91,9 +117,12 @@ public class AuthService(
 
         if (storedToken is null
             || storedToken.RevokedAt is not null
-            || storedToken.ExpiresAt <= DateTime.UtcNow)
+            || storedToken.ExpiresAt <= DateTime.UtcNow
+            || !storedToken.User.IsActivated)
         {
-            return Result<RefreshTokenResponse>.Failure("Invalid or expired refresh token.");
+            return Result<RefreshTokenResponse>.Failure(
+                "Invalid or expired refresh token.",
+                ResultErrorKind.Unauthorized);
         }
 
         var user = storedToken.User;
@@ -140,6 +169,7 @@ public class AuthService(
         }
 
         user.PasswordHash = passwordHasher.HashPassword(user, request.NewPassword);
+        user.RotateSecurityStamp();
 
         // Revoke every token that has not been revoked yet. This includes expired tokens because
         // the filter only checks RevokedAt.

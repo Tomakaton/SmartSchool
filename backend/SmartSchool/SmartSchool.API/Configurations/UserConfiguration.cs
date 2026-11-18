@@ -23,6 +23,14 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
             .IsRequired()
             .HasMaxLength(512);
 
+        builder.Property(user => user.IsActivated)
+            .IsRequired()
+            .HasDefaultValue(false);
+
+        builder.Property(user => user.SecurityStamp)
+            .IsRequired()
+            .HasMaxLength(64);
+
         builder.Property(user => user.DateCreated)
             .IsRequired()
             .HasDefaultValueSql("now()");

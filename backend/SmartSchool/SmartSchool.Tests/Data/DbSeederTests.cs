@@ -56,6 +56,8 @@ public class DbSeederTests
         Assert.Multiple(() =>
         {
             Assert.That(admin.Email, Is.EqualTo(AdminEmail));
+            Assert.That(admin.IsActivated, Is.True);
+            Assert.That(admin.SecurityStamp, Has.Length.EqualTo(32));
             Assert.That(
                 _passwordHasher.VerifyHashedPassword(admin, admin.PasswordHash, AdminPassword),
                 Is.Not.EqualTo(PasswordVerificationResult.Failed));
@@ -73,11 +75,15 @@ public class DbSeederTests
         await CreateSeeder().SeedAsync();
         await CreateSeeder().SeedAsync();
 
-        Assert.Multiple(async () =>
+        var roleCount = await _dbContext.Roles.CountAsync();
+        var userCount = await _dbContext.Users.CountAsync();
+        var assignmentCount = await _dbContext.RoleAssignments.CountAsync();
+
+        Assert.Multiple(() =>
         {
-            Assert.That(await _dbContext.Roles.CountAsync(), Is.EqualTo(RoleNames.All.Count));
-            Assert.That(await _dbContext.Users.CountAsync(), Is.EqualTo(1));
-            Assert.That(await _dbContext.RoleAssignments.CountAsync(), Is.EqualTo(1));
+            Assert.That(roleCount, Is.EqualTo(RoleNames.All.Count));
+            Assert.That(userCount, Is.EqualTo(1));
+            Assert.That(assignmentCount, Is.EqualTo(1));
         });
     }
 
@@ -92,12 +98,14 @@ public class DbSeederTests
         await CreateSeeder().SeedAsync();
 
         var admin = await _dbContext.Users.SingleAsync();
-        Assert.Multiple(async () =>
+        var assignmentCount = await _dbContext.RoleAssignments.CountAsync();
+
+        Assert.Multiple(() =>
         {
             Assert.That(
                 _passwordHasher.VerifyHashedPassword(admin, admin.PasswordHash, "an-older-password"),
                 Is.Not.EqualTo(PasswordVerificationResult.Failed));
-            Assert.That(await _dbContext.RoleAssignments.CountAsync(), Is.EqualTo(1));
+            Assert.That(assignmentCount, Is.EqualTo(1));
         });
     }
 

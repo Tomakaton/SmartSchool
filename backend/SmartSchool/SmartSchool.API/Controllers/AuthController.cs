@@ -3,6 +3,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SmartSchool.API.Contracts.Auth;
+using SmartSchool.API.Contracts.Common;
 using SmartSchool.API.Services;
 
 namespace SmartSchool.API.Controllers;
@@ -24,7 +25,9 @@ public class AuthController(IAuthService authService) : ControllerBase
 
         if (!result.Succeeded)
         {
-            return Unauthorized(new { message = result.Error });
+            return result.ErrorKind == ResultErrorKind.Forbidden
+                ? StatusCode(StatusCodes.Status403Forbidden, new { message = result.Error })
+                : Unauthorized(new { message = result.Error });
         }
 
         return Ok(result.Value);
@@ -40,7 +43,7 @@ public class AuthController(IAuthService authService) : ControllerBase
         CancellationToken cancellationToken)
     {
         var result = await authService.RefreshTokenAsync(request, cancellationToken);
-  
+        
         if (!result.Succeeded)
         {
             return Unauthorized(new { message = result.Error });

@@ -46,6 +46,7 @@ public class RegisterController(
         {
             Email = email,
             PasswordHash = string.Empty,
+            IsActivated = true,
             DateCreated = DateTime.UtcNow
         };
 

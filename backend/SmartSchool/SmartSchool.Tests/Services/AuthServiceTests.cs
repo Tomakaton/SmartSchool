@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using SmartSchool.API.Contracts.Auth;
+using SmartSchool.API.Contracts.Common;
 using SmartSchool.API.Data;
 using SmartSchool.API.Models;
 using SmartSchool.API.Options;
@@ -247,6 +248,7 @@ public class AuthServiceTests
     public async Task ChangePasswordAsync_WithCorrectCurrentPassword_UpdatesHashAndRevokesActiveTokens()
     {
         var user = await AddUserAsync("student@example.com", "OldPassword123!");
+        var initialStamp = user.SecurityStamp;
         var activeToken = await AddRefreshTokenAsync(user, "active-token", DateTime.UtcNow.AddDays(1));
         var expiredToken = await AddRefreshTokenAsync(user, "expired-token", DateTime.UtcNow.AddDays(-1));
         var alreadyRevokedAt = DateTime.UtcNow.AddHours(-2);
@@ -271,6 +273,8 @@ public class AuthServiceTests
             Assert.That(
                 _passwordHasher.VerifyHashedPassword(storedUser, storedUser.PasswordHash, "OldPassword123!"),
                 Is.EqualTo(PasswordVerificationResult.Failed));
+            Assert.That(storedUser.SecurityStamp, Is.Not.EqualTo(initialStamp));
+            Assert.That(storedUser.SecurityStamp, Has.Length.EqualTo(32));
         });
 
         var tokens = await _dbContext.RefreshTokens.ToListAsync();
@@ -287,6 +291,7 @@ public class AuthServiceTests
     public async Task ChangePasswordAsync_WithIncorrectCurrentPassword_LeavesUserAndTokensUntouched()
     {
         var user = await AddUserAsync("student@example.com", "OldPassword123!");
+        var initialStamp = user.SecurityStamp;
         var token = await AddRefreshTokenAsync(user, "active-token", DateTime.UtcNow.AddDays(1));
 
         var result = await _authService.ChangePasswordAsync(
@@ -307,6 +312,88 @@ public class AuthServiceTests
                 _passwordHasher.VerifyHashedPassword(storedUser, storedUser.PasswordHash, "OldPassword123!"),
                 Is.Not.EqualTo(PasswordVerificationResult.Failed));
             Assert.That(storedToken.RevokedAt, Is.Null);
+            Assert.That(storedUser.SecurityStamp, Is.EqualTo(initialStamp));
+        });
+    }
+
+    [Test]
+    public async Task LoginAsync_WhenAccountPendingActivationWithNoPassword_ReturnsForbidden()
+    {
+        var user = new User
+        {
+            Email = "pending@example.com",
+            PasswordHash = string.Empty,
+            IsActivated = false,
+            DateCreated = DateTime.UtcNow
+        };
+        _dbContext.Users.Add(user);
+        await _dbContext.SaveChangesAsync();
+
+        var result = await _authService.LoginAsync(new LoginRequest("pending@example.com", "Anything123!"));
+        var refreshTokenCount = await _dbContext.RefreshTokens.CountAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.ErrorKind, Is.EqualTo(ResultErrorKind.Forbidden));
+            Assert.That(refreshTokenCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task LoginAsync_WhenDeactivatedAccountSuppliesWrongPassword_ReturnsUnauthorized()
+    {
+        var user = await AddUserAsync("inactive@example.com", "CorrectPassword123!");
+        user.IsActivated = false;
+        await _dbContext.SaveChangesAsync();
+
+        var result = await _authService.LoginAsync(new LoginRequest("inactive@example.com", "WrongPassword123!"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.ErrorKind, Is.EqualTo(ResultErrorKind.Unauthorized));
+            Assert.That(result.Error, Is.EqualTo("Invalid email or password."));
+        });
+    }
+
+    [Test]
+    public async Task LoginAsync_WhenDeactivatedAccountSuppliesCorrectPassword_ReturnsForbidden()
+    {
+        var user = await AddUserAsync("inactive@example.com", "CorrectPassword123!");
+        user.IsActivated = false;
+        await _dbContext.SaveChangesAsync();
+
+        var result = await _authService.LoginAsync(new LoginRequest("inactive@example.com", "CorrectPassword123!"));
+        var refreshTokenCount = await _dbContext.RefreshTokens.CountAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.ErrorKind, Is.EqualTo(ResultErrorKind.Forbidden));
+            Assert.That(refreshTokenCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task RefreshTokenAsync_WhenUserIsDeactivated_FailsWithoutRotating()
+    {
+        var user = await AddUserAsync("inactive@example.com", "Password123!");
+        var token = await AddRefreshTokenAsync(user, "valid-refresh-token", DateTime.UtcNow.AddDays(1));
+        user.IsActivated = false;
+        await _dbContext.SaveChangesAsync();
+
+        var result = await _authService.RefreshTokenAsync(new RefreshTokenRequest("valid-refresh-token"));
+
+        var storedToken = await _dbContext.RefreshTokens.SingleAsync(stored => stored.Id == token.Id);
+        var refreshTokenCount = await _dbContext.RefreshTokens.CountAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.ErrorKind, Is.EqualTo(ResultErrorKind.Unauthorized));
+            Assert.That(storedToken.RevokedAt, Is.Null);
+            Assert.That(refreshTokenCount, Is.EqualTo(1));
         });
     }
 
@@ -345,6 +432,7 @@ public class AuthServiceTests
         {
             Email = email,
             PasswordHash = string.Empty,
+            IsActivated = true,
             DateCreated = DateTime.UtcNow
         };
 

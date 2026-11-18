@@ -85,6 +85,7 @@ public class DbSeeder(
             {
                 Email = email,
                 PasswordHash = string.Empty,
+                IsActivated = true,
                 DateCreated = timeProvider.GetUtcNow().UtcDateTime
             };
             user.PasswordHash = passwordHasher.HashPassword(user, _admin.Password);
