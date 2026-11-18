@@ -8,7 +8,9 @@ public class InstitutionConfiguration : IEntityTypeConfiguration<Institution>
 {
     public void Configure(EntityTypeBuilder<Institution> builder)
     {
-        builder.ToTable("Institutions");
+        builder.ToTable("Institutions", table => table.HasCheckConstraint(
+            "CK_Institutions_Status",
+            "\"Status\" IN ('ACTIVE', 'SUSPENDED', 'ARCHIVED')"));
 
         builder.HasKey(institution => institution.Id);
 
@@ -27,9 +29,12 @@ public class InstitutionConfiguration : IEntityTypeConfiguration<Institution>
             .IsRequired()
             .HasMaxLength(100);
 
-        // Stored as its wire name (ACTIVE, SUSPENDED, ARCHIVED) so the enum value is readable in SQL.
+        // Stored as its wire name (ACTIVE, SUSPENDED, ARCHIVED) so SQL matches the API contract.
+        // HasConversion<string>() alone would write the C# member name ("Active").
         builder.Property(institution => institution.Status)
-            .HasConversion<string>()
+            .HasConversion(
+                status => status.ToString().ToUpperInvariant(),
+                value => Enum.Parse<InstitutionStatus>(value, true))
             .IsRequired()
             .HasMaxLength(20);
 

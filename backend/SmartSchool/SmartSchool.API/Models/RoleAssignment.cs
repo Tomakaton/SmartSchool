@@ -13,11 +13,15 @@ public class RoleAssignment
     public User User { get; init; } = null!;
 
     public long RoleId { get; init; }
-    public Role Role { get; init; } = null!;
+    public Role Role { get; init; } = null!;  
 
     public Guid? InstitutionId { get; init; }
     public Institution? Institution { get; init; }
 
     public DateOnly ValidFrom { get; init; }
-    public DateOnly? ValidTo { get; init; }
+    /// <summary>
+    /// Last day the assignment is valid (inclusive). Settable so a removal can end the assignment
+    /// (<c>ValidTo = today</c>) instead of deleting the row.
+    /// </summary>
+    public DateOnly? ValidTo { get; set; }
 }

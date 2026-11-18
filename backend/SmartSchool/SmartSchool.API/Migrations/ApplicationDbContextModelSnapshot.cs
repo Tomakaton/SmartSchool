@@ -61,7 +61,10 @@ namespace SmartSchool.API.Migrations
 
                     b.HasIndex("Name");
 
-                    b.ToTable("Institutions", (string)null);
+                    b.ToTable("Institutions", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Institutions_Status", "\"Status\" IN ('ACTIVE', 'SUSPENDED', 'ARCHIVED')");
+                        });
                 });
 
             modelBuilder.Entity("SmartSchool.API.Models.RefreshToken", b =>
@@ -170,7 +173,10 @@ namespace SmartSchool.API.Migrations
                         .HasDatabaseName("IX_RoleAssignments_UserId_RoleId_InstitutionId")
                         .HasFilter("\"InstitutionId\" IS NOT NULL AND \"ValidTo\" IS NULL");
 
-                    b.ToTable("RoleAssignments", (string)null);
+                    b.ToTable("RoleAssignments", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_RoleAssignments_ValidDates", "\"ValidTo\" IS NULL OR \"ValidTo\" >= \"ValidFrom\"");
+                        });
                 });
 
             modelBuilder.Entity("SmartSchool.API.Models.User", b =>

@@ -8,7 +8,9 @@ public class RoleAssignmentConfiguration : IEntityTypeConfiguration<RoleAssignme
 {
     public void Configure(EntityTypeBuilder<RoleAssignment> builder)
     {
-        builder.ToTable("RoleAssignments");
+        builder.ToTable("RoleAssignments", table => table.HasCheckConstraint(
+            "CK_RoleAssignments_ValidDates",
+            "\"ValidTo\" IS NULL OR \"ValidTo\" >= \"ValidFrom\""));
 
         builder.HasKey(roleAssignment => roleAssignment.Id);
 
