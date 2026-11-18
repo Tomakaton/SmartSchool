@@ -130,20 +130,45 @@ namespace SmartSchool.API.Migrations
 
             modelBuilder.Entity("SmartSchool.API.Models.RoleAssignment", b =>
                 {
-                    b.Property<Guid>("UserId")
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid?>("InstitutionId")
                         .HasColumnType("uuid");
 
                     b.Property<long>("RoleId")
                         .HasColumnType("bigint");
 
-                    b.Property<DateTime>("AssignedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("timestamp with time zone")
-                        .HasDefaultValueSql("now()");
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
 
-                    b.HasKey("UserId", "RoleId");
+                    b.Property<DateOnly>("ValidFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("ValidTo")
+                        .HasColumnType("date");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstitutionId");
 
                     b.HasIndex("RoleId");
+
+                    b.HasIndex("UserId", "InstitutionId")
+                        .HasDatabaseName("IX_RoleAssignments_UserId_InstitutionId");
+
+                    b.HasIndex("UserId", "RoleId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_RoleAssignments_UserId_RoleId_Platform")
+                        .HasFilter("\"InstitutionId\" IS NULL AND \"ValidTo\" IS NULL");
+
+                    b.HasIndex("UserId", "RoleId", "InstitutionId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_RoleAssignments_UserId_RoleId_InstitutionId")
+                        .HasFilter("\"InstitutionId\" IS NOT NULL AND \"ValidTo\" IS NULL");
 
                     b.ToTable("RoleAssignments", (string)null);
                 });
@@ -197,6 +222,11 @@ namespace SmartSchool.API.Migrations
 
             modelBuilder.Entity("SmartSchool.API.Models.RoleAssignment", b =>
                 {
+                    b.HasOne("SmartSchool.API.Models.Institution", "Institution")
+                        .WithMany()
+                        .HasForeignKey("InstitutionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("SmartSchool.API.Models.Role", "Role")
                         .WithMany("RoleAssignments")
                         .HasForeignKey("RoleId")
@@ -208,6 +238,8 @@ namespace SmartSchool.API.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("Institution");
 
                     b.Navigation("Role");
 

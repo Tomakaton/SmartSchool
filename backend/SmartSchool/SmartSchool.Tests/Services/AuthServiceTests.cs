@@ -357,7 +357,7 @@ public class AuthServiceTests
                 UserId = user.Id,
                 RoleId = role.Id,
                 Role = role,
-                AssignedAt = DateTime.UtcNow
+                ValidFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1))
             });
         }
 
