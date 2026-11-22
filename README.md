@@ -111,14 +111,16 @@ avoid disclosing which accounts exist.
 ## Authentication model
 
 - **Access token**: signed JWT, 15 minutes by default. Carries identity and revocation state only:
-  `sub` (user id), `jti`, `iat`, `exp`, and `stamp` (the user's security stamp). Authorization
-  roles are resolved server-side per request and are never embedded in token claims.
+  `sub` (user id), `jti`, `iat`, `exp`, and `stamp` (the user's security stamp). `OnTokenValidated`
+  checks `stamp` and `IsActivated` against the database on each authenticated request so rotating
+  the stamp invalidates issued access tokens immediately. Authorization roles are resolved
+  server-side per request and are never embedded in token claims.
 - **Refresh token**: random 512-bit value, 7 days by default. Only its SHA-256 hex digest is
   persisted; the raw value is returned to the client once.
 - **Rotation**: refreshing revokes the presented token, stores the replacement, and links the two
   through `ReplacedByTokenId`. A revoked or expired token is rejected.
-- **Password change**: re-hashes the password and revokes every non-revoked refresh token for that
-  user, ending other sessions.
+- **Password change**: re-hashes the password, rotates `SecurityStamp` (immediately invalidating
+  issued access tokens), and revokes every non-revoked refresh token for that user.
 - **Emails**: login and registration compare emails case-insensitively and trim surrounding
   whitespace.
 

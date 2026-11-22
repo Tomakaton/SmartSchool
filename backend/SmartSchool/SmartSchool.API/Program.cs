@@ -69,6 +69,10 @@ builder.Services
             ClockSkew = TimeSpan.FromSeconds(30),
             NameClaimType = JwtRegisteredClaimNames.Sub
         };
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = JwtSecurityStampValidator.ValidateAsync
+        };
     });
 
 builder.Services.AddAuthorization();
