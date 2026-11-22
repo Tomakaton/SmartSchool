@@ -78,6 +78,7 @@ public class AuthServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(storedToken.UserId, Is.EqualTo(user.Id));
+            Assert.That(storedToken.FamilyId, Is.Not.EqualTo(Guid.Empty));
             Assert.That(storedToken.TokenHash, Is.EqualTo(_tokenService.HashRefreshToken(response.RefreshToken)));
             Assert.That(storedToken.TokenHash, Is.Not.EqualTo(response.RefreshToken));
             Assert.That(storedToken.RevokedAt, Is.Null);
@@ -193,11 +194,94 @@ public class AuthServiceTests
             Assert.That(tokens, Has.Count.EqualTo(2));
             Assert.That(persistedOld.RevokedAt, Is.Not.Null);
             Assert.That(persistedOld.ReplacedByTokenId, Is.EqualTo(persistedNew.Id));
+            Assert.That(persistedNew.FamilyId, Is.EqualTo(persistedOld.FamilyId));
             Assert.That(persistedNew.RevokedAt, Is.Null);
             Assert.That(persistedNew.TokenHash,
                 Is.EqualTo(_tokenService.HashRefreshToken(response.RefreshToken)));
             Assert.That(persistedNew.ExpiresAt,
                 Is.EqualTo(DateTime.UtcNow.AddDays(7)).Within(TimeSpan.FromMinutes(1)));
+        });
+    }
+
+    [Test]
+    public async Task RefreshTokenAsync_WithAlreadyRotatedToken_RevokesEntireFamilyWithoutAffectingOtherSessions()
+    {
+        await AddUserAsync("student@example.com", "Password123!");
+
+        var firstLogin = await _authService.LoginAsync(new LoginRequest("student@example.com", "Password123!"));
+        var secondLogin = await _authService.LoginAsync(new LoginRequest("student@example.com", "Password123!"));
+
+        var firstRotated = await _authService.RefreshTokenAsync(
+            new RefreshTokenRequest(firstLogin.Value!.RefreshToken));
+        var secondRotated = await _authService.RefreshTokenAsync(
+            new RefreshTokenRequest(firstRotated.Value!.RefreshToken));
+
+        Assert.That(secondRotated.Succeeded, Is.True, secondRotated.Error);
+
+        // Replay the very first token from the first login session.
+        var replayResult = await _authService.RefreshTokenAsync(
+            new RefreshTokenRequest(firstLogin.Value.RefreshToken));
+
+        var latestFirstFamilyHash = _tokenService.HashRefreshToken(secondRotated.Value!.RefreshToken);
+        var secondSessionHash = _tokenService.HashRefreshToken(secondLogin.Value!.RefreshToken);
+
+        var latestFirstFamilyToken = await _dbContext.RefreshTokens
+            .SingleAsync(token => token.TokenHash == latestFirstFamilyHash);
+        var secondSessionToken = await _dbContext.RefreshTokens
+            .SingleAsync(token => token.TokenHash == secondSessionHash);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(replayResult.Succeeded, Is.False);
+            Assert.That(replayResult.ErrorKind, Is.EqualTo(ResultErrorKind.Unauthorized));
+            Assert.That(latestFirstFamilyToken.FamilyId, Is.Not.EqualTo(secondSessionToken.FamilyId));
+            Assert.That(latestFirstFamilyToken.RevokedAt, Is.Not.Null);
+            Assert.That(secondSessionToken.RevokedAt, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task RefreshTokenAsync_WhenConcurrentModificationOccurs_ReturnsUnauthorized()
+    {
+        var dbName = $"auth-concurrency-tests-{Guid.NewGuid()}";
+        await using var conflictContext = new ConcurrencyConflictDbContext(
+            new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseInMemoryDatabase(dbName)
+                .Options);
+
+        var user = new User
+        {
+            Email = "student@example.com",
+            PasswordHash = _passwordHasher.HashPassword(null!, "Password123!"),
+            IsActivated = true,
+            DateCreated = DateTime.UtcNow
+        };
+        const string rawToken = "concurrent-refresh-token";
+        conflictContext.Users.Add(user);
+        conflictContext.RefreshTokens.Add(new RefreshToken
+        {
+            UserId = user.Id,
+            TokenHash = _tokenService.HashRefreshToken(rawToken),
+            CreatedAt = DateTime.UtcNow,
+            ExpiresAt = DateTime.UtcNow.AddDays(1)
+        });
+        await conflictContext.SaveChangesAsync();
+
+        conflictContext.ThrowConcurrencyOnNextSave = true;
+
+        var service = new AuthService(
+            conflictContext,
+            _tokenService,
+            _passwordHasher,
+            Options.Create(Settings));
+
+        var result = await service.RefreshTokenAsync(new RefreshTokenRequest(rawToken));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.ErrorKind, Is.EqualTo(ResultErrorKind.Unauthorized));
+            Assert.That(result.Error, Is.EqualTo("Invalid or expired refresh token."));
         });
     }
 
@@ -510,5 +594,22 @@ public class AuthServiceTests
             User user,
             string hashedPassword,
             string providedPassword) => PasswordVerificationResult.SuccessRehashNeeded;
+    }
+
+    private sealed class ConcurrencyConflictDbContext(
+        DbContextOptions<ApplicationDbContext> options) : ApplicationDbContext(options)
+    {
+        public bool ThrowConcurrencyOnNextSave { get; set; }
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            if (ThrowConcurrencyOnNextSave)
+            {
+                ThrowConcurrencyOnNextSave = false;
+                throw new DbUpdateConcurrencyException("Simulated concurrent refresh.");
+            }
+
+            return base.SaveChangesAsync(cancellationToken);
+        }
     }
 }

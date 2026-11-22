@@ -79,6 +79,9 @@ namespace SmartSchool.API.Migrations
                     b.Property<DateTime>("ExpiresAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid>("FamilyId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid?>("ReplacedByTokenId")
                         .HasColumnType("uuid");
 
@@ -93,6 +96,12 @@ namespace SmartSchool.API.Migrations
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.HasIndex("ReplacedByTokenId");
@@ -100,7 +109,9 @@ namespace SmartSchool.API.Migrations
                     b.HasIndex("TokenHash")
                         .IsUnique();
 
-                    b.HasIndex("UserId");
+                    b.HasIndex("FamilyId", "RevokedAt");
+
+                    b.HasIndex("UserId", "RevokedAt");
 
                     b.ToTable("RefreshTokens", (string)null);
                 });

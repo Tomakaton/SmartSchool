@@ -110,4 +110,27 @@ public class ModelConfigurationTests
             Assert.That(second.SecurityStamp, Is.Not.EqualTo(first.SecurityStamp));
         });
     }
+
+    [Test]
+    public void RefreshToken_ConfiguresXminConcurrencyTokenAndRevocationIndexes()
+    {
+        var entityType = _dbContext.GetService<IDesignTimeModel>().Model
+            .FindEntityType(typeof(RefreshToken))!;
+        var versionProperty = entityType.FindProperty(nameof(RefreshToken.Version))!;
+        var indexColumnSets = entityType.GetIndexes()
+            .Select(index => index.Properties.Select(property => property.Name).ToArray())
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(versionProperty.IsConcurrencyToken, Is.True);
+            Assert.That(versionProperty.ValueGenerated, Is.EqualTo(ValueGenerated.OnAddOrUpdate));
+            Assert.That(
+                indexColumnSets,
+                Has.Some.EqualTo(new[] { nameof(RefreshToken.UserId), nameof(RefreshToken.RevokedAt) }));
+            Assert.That(
+                indexColumnSets,
+                Has.Some.EqualTo(new[] { nameof(RefreshToken.FamilyId), nameof(RefreshToken.RevokedAt) }));
+        });
+    }
 }

@@ -12,6 +12,9 @@ public class RefreshTokenConfiguration : IEntityTypeConfiguration<RefreshToken>
 
         builder.HasKey(refreshToken => refreshToken.Id);
 
+        builder.Property(refreshToken => refreshToken.FamilyId)
+            .IsRequired();
+
         builder.Property(refreshToken => refreshToken.TokenHash)
             .IsRequired()
             .HasMaxLength(128);
@@ -19,11 +22,27 @@ public class RefreshTokenConfiguration : IEntityTypeConfiguration<RefreshToken>
         builder.HasIndex(refreshToken => refreshToken.TokenHash)
             .IsUnique();
 
+        // Used when revoking all active tokens for a user (e.g., password change) or a family.
+        builder.HasIndex(refreshToken => new
+        {
+            refreshToken.UserId,
+            refreshToken.RevokedAt
+        });
+
+        builder.HasIndex(refreshToken => new
+        {
+            refreshToken.FamilyId,
+            refreshToken.RevokedAt
+        });
+
         builder.Property(refreshToken => refreshToken.CreatedAt)
             .IsRequired();
 
         builder.Property(refreshToken => refreshToken.ExpiresAt)
             .IsRequired();
+
+        builder.Property(refreshToken => refreshToken.Version)
+            .IsRowVersion();
 
         builder.HasOne(refreshToken => refreshToken.User)
             .WithMany(user => user.RefreshTokens)

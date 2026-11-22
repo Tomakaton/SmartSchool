@@ -111,8 +111,25 @@ public class AuthService(
                 refreshToken => refreshToken.TokenHash == tokenHash,
                 cancellationToken);
 
-        if (storedToken is null
-            || storedToken.RevokedAt is not null
+        if (storedToken is null)
+        {
+            return Result<RefreshTokenResponse>.Failure(
+                "Invalid or expired refresh token.",
+                ResultErrorKind.Unauthorized);
+        }
+
+        // Reuse detection: presenting a token that was already rotated means either the token was
+        // stolen or an old copy was replayed. Revoke every active token in this family immediately.
+        if (storedToken.ReplacedByTokenId is not null)
+        {
+            await RevokeFamilyAsync(storedToken.FamilyId, cancellationToken);
+
+            return Result<RefreshTokenResponse>.Failure(
+                "Invalid or expired refresh token.",
+                ResultErrorKind.Unauthorized);
+        }
+
+        if (storedToken.RevokedAt is not null
             || storedToken.ExpiresAt <= DateTime.UtcNow
             || !storedToken.User.IsActivated)
         {
@@ -123,7 +140,7 @@ public class AuthService(
 
         var user = storedToken.User;
         var accessToken = tokenService.CreateAccessToken(user);
-        var refreshToken = CreateRefreshToken(user);
+        var refreshToken = CreateRefreshToken(user, storedToken.FamilyId);
 
         // Single-use rotation: revoke the token that was presented and link it to its replacement.
         storedToken.RevokedAt = DateTime.UtcNow;
@@ -131,7 +148,17 @@ public class AuthService(
 
         dbContext.RefreshTokens.Add(refreshToken.Entity);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // A concurrent request already rotated or revoked this token; fail closed.
+            return Result<RefreshTokenResponse>.Failure(
+                "Invalid or expired refresh token.",
+                ResultErrorKind.Unauthorized);
+        }
 
         return Result<RefreshTokenResponse>.Success(new RefreshTokenResponse(
             accessToken.Value,
@@ -185,13 +212,35 @@ public class AuthService(
         return Result.Success();
     }
 
-    private IssuedRefreshToken CreateRefreshToken(User user)
+    private async Task RevokeFamilyAsync(Guid familyId, CancellationToken cancellationToken)
+    {
+        var activeFamilyTokens = await dbContext.RefreshTokens
+            .Where(refreshToken => refreshToken.FamilyId == familyId && refreshToken.RevokedAt == null)
+            .ToListAsync(cancellationToken);
+
+        if (activeFamilyTokens.Count == 0)
+        {
+            return;
+        }
+
+        var revokedAt = DateTime.UtcNow;
+
+        foreach (var familyToken in activeFamilyTokens)
+        {
+            familyToken.RevokedAt = revokedAt;
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private IssuedRefreshToken CreateRefreshToken(User user, Guid? familyId = null)
     {
         var token = tokenService.CreateRefreshToken();
 
         var entity = new RefreshToken
         {
             UserId = user.Id,
+            FamilyId = familyId ?? Guid.NewGuid(),
             TokenHash = tokenService.HashRefreshToken(token),
             CreatedAt = DateTime.UtcNow,
             ExpiresAt = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpiryDays)

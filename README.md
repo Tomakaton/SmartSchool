@@ -117,8 +117,10 @@ avoid disclosing which accounts exist.
   server-side per request and are never embedded in token claims.
 - **Refresh token**: random 512-bit value, 7 days by default. Only its SHA-256 hex digest is
   persisted; the raw value is returned to the client once.
-- **Rotation**: refreshing revokes the presented token, stores the replacement, and links the two
-  through `ReplacedByTokenId`. A revoked or expired token is rejected.
+- **Rotation**: refreshing revokes the presented token, stores the replacement within the same
+  `FamilyId`, and links the two through `ReplacedByTokenId`. Replaying an already-rotated token
+  revokes every active token in that `FamilyId` and returns `401`. Concurrent refresh races are
+  guarded by PostgreSQL's `xmin` row-version concurrency token.
 - **Password change**: re-hashes the password, rotates `SecurityStamp` (immediately invalidating
   issued access tokens), and revokes every non-revoked refresh token for that user.
 - **Emails**: login and registration compare emails case-insensitively and trim surrounding
@@ -159,7 +161,6 @@ dotnet ef database update --project SmartSchool.API
 ## Known limitations / next steps
 
 - No background job removes expired or revoked refresh tokens.
-- Refresh-token reuse is not detected; replaying an old token cannot revoke its rotation chain.
 - No email verification, password reset, or role management API yet.
 - The unique index on `Users.Email` is case-sensitive while login/registration are case-insensitive,
   so concurrent registration of the same address in different casing can surface as a `500`.
