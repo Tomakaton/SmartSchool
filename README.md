@@ -1,8 +1,7 @@
 ﻿# SmartSchool API
 
 Backend for the SmartSchool application. It currently provides the authentication foundation:
-user registration, JWT login, refresh-token rotation, password changes, and role-aware access
-tokens on top of PostgreSQL.
+user registration, JWT login, refresh-token rotation, and password changes on top of PostgreSQL.
 
 ## Stack
 
@@ -111,8 +110,9 @@ avoid disclosing which accounts exist.
 
 ## Authentication model
 
-- **Access token**: signed JWT, 15 minutes by default. Contains `sub` (user id), `email`, `jti`,
-  and one role claim per *active* role assignment (issued with the `ClaimTypes.Role` claim type).
+- **Access token**: signed JWT, 15 minutes by default. Carries identity and revocation state only:
+  `sub` (user id), `jti`, `iat`, `exp`, and `stamp` (the user's security stamp). Authorization
+  roles are resolved server-side per request and are never embedded in token claims.
 - **Refresh token**: random 512-bit value, 7 days by default. Only its SHA-256 hex digest is
   persisted; the raw value is returned to the client once.
 - **Rotation**: refreshing revokes the presented token, stores the replacement, and links the two
@@ -131,8 +131,8 @@ dotnet test
 
 The suite runs entirely in memory; no database, Docker, or network access is required. It covers:
 
-- `AuthService`: login outcomes, email matching, role filtering, refresh-token rotation/revocation,
-  password changes.
+- `AuthService`: login outcomes, email matching, activation checks, refresh-token rotation/revocation,
+  password changes, and security-stamp rotation.
 - `TokenService`: JWT claims/expiry/signature, refresh-token generation, SHA-256 hashing.
 - Auth request validation: required fields, email format, and the 8-character password minimum.
 

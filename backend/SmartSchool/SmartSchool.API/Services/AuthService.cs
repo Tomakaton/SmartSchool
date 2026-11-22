@@ -33,8 +33,6 @@ public class AuthService(
         var email = request.Identifier.Trim().ToLowerInvariant();
 
         var user = await dbContext.Users
-            .Include(user => user.RoleAssignments)
-            .ThenInclude(roleAssignment => roleAssignment.Role)
             .FirstOrDefaultAsync(user => user.Email.ToLower() == email, cancellationToken);
 
         if (user is null)
@@ -86,7 +84,7 @@ public class AuthService(
                 ResultErrorKind.Forbidden);
         }
 
-        var accessToken = CreateAccessToken(user);
+        var accessToken = tokenService.CreateAccessToken(user);
         var refreshToken = CreateRefreshToken(user);
 
         dbContext.RefreshTokens.Add(refreshToken.Entity);
@@ -109,8 +107,6 @@ public class AuthService(
 
         var storedToken = await dbContext.RefreshTokens
             .Include(refreshToken => refreshToken.User)
-            .ThenInclude(user => user.RoleAssignments)
-            .ThenInclude(roleAssignment => roleAssignment.Role)
             .FirstOrDefaultAsync(
                 refreshToken => refreshToken.TokenHash == tokenHash,
                 cancellationToken);
@@ -126,7 +122,7 @@ public class AuthService(
         }
 
         var user = storedToken.User;
-        var accessToken = CreateAccessToken(user);
+        var accessToken = tokenService.CreateAccessToken(user);
         var refreshToken = CreateRefreshToken(user);
 
         // Single-use rotation: revoke the token that was presented and link it to its replacement.
@@ -187,16 +183,6 @@ public class AuthService(
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return Result.Success();
-    }
-
-    private AccessTokenResult CreateAccessToken(User user)
-    {
-        // Only active roles are embedded; changing a role takes effect the next time a token is issued.
-        var roles = user.RoleAssignments
-            .Where(roleAssignment => roleAssignment.Role.IsActive)
-            .Select(roleAssignment => roleAssignment.Role.Name);
-
-        return tokenService.CreateAccessToken(user, roles);
     }
 
     private IssuedRefreshToken CreateRefreshToken(User user)

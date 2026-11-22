@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -26,59 +27,127 @@ public class TokenServiceTests
     private readonly TokenService _tokenService = new(Options.Create(Settings));
 
     [Test]
-    public void CreateAccessToken_ReturnsValidJwtWithUserClaims()
+    public void CreateAccessToken_ReturnsValidJwtWithIdentityAndStampClaims()
     {
+        var fixedNow = new DateTimeOffset(2026, 11, 22, 15, 30, 0, TimeSpan.Zero);
+        var tokenService = new TokenService(Options.Create(Settings), new FixedTimeProvider(fixedNow));
         var user = new User
         {
             Email = "student@example.com",
-            PasswordHash = "irrelevant"
+            PasswordHash = "irrelevant",
+            IsActivated = true
         };
 
-        var result = _tokenService.CreateAccessToken(user, ["Teacher", "Student"]);
+        var result = tokenService.CreateAccessToken(user);
 
-        var token = Validate(result.Value);
+        var token = Validate(result.Value, validateLifetime: false);
 
         Assert.Multiple(() =>
         {
             Assert.That(token.Issuer, Is.EqualTo(Settings.Issuer));
             Assert.That(token.Audiences, Contains.Item(Settings.Audience));
-            Assert.That(token.Claims.Single(claim => claim.Type == JwtRegisteredClaimNames.Sub).Value,
+            Assert.That(
+                token.Claims.Single(claim => claim.Type == JwtRegisteredClaimNames.Sub).Value,
                 Is.EqualTo(user.Id.ToString()));
-            Assert.That(token.Claims.Single(claim => claim.Type == JwtRegisteredClaimNames.Email).Value,
-                Is.EqualTo(user.Email));
-            Assert.That(token.Claims.Single(claim => claim.Type == JwtRegisteredClaimNames.Jti).Value,
-                Is.Not.Empty);
-            Assert.That(GetRoleClaims(token), Is.EquivalentTo(["Teacher", "Student"]));
+            Assert.That(
+                Guid.TryParse(
+                    token.Claims.Single(claim => claim.Type == JwtRegisteredClaimNames.Jti).Value,
+                    out _),
+                Is.True);
+            Assert.That(
+                token.Claims.Single(claim => claim.Type == JwtRegisteredClaimNames.Iat).Value,
+                Is.EqualTo(EpochTime.GetIntDate(fixedNow.UtcDateTime).ToString(CultureInfo.InvariantCulture)));
+            Assert.That(
+                token.Claims.Single(claim => claim.Type == TokenClaimTypes.SecurityStamp).Value,
+                Is.EqualTo(user.SecurityStamp));
+            Assert.That(
+                token.Claims.Any(claim => claim.Type == JwtRegisteredClaimNames.Email),
+                Is.False);
+            Assert.That(GetRoleClaims(token), Is.Empty);
         });
     }
 
     [Test]
     public void CreateAccessToken_ReturnsExpiryMatchingConfiguredLifetime()
     {
+        var fixedNow = new DateTimeOffset(2026, 11, 22, 15, 30, 0, TimeSpan.Zero);
+        var tokenService = new TokenService(Options.Create(Settings), new FixedTimeProvider(fixedNow));
         var user = new User { Email = "student@example.com", PasswordHash = "irrelevant" };
+        var expectedExpiry = fixedNow.UtcDateTime.AddMinutes(Settings.AccessTokenExpiryMinutes);
 
-        var before = DateTime.UtcNow;
-        var result = _tokenService.CreateAccessToken(user, []);
-        var after = DateTime.UtcNow;
+        var result = tokenService.CreateAccessToken(user);
+        var token = Validate(result.Value, validateLifetime: false);
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.ExpiresAt,
-                Is.EqualTo(before.AddMinutes(Settings.AccessTokenExpiryMinutes)).Within(TimeSpan.FromMinutes(1)));
-            Assert.That(result.ExpiresAt, Is.GreaterThan(after));
-            Assert.That(Validate(result.Value).ValidTo,
-                Is.EqualTo(result.ExpiresAt).Within(TimeSpan.FromSeconds(2)));
+            Assert.That(result.ExpiresAt, Is.EqualTo(expectedExpiry));
+            Assert.That(token.ValidTo, Is.EqualTo(expectedExpiry));
         });
     }
 
     [Test]
-    public void CreateAccessToken_WithNoRoles_HasNoRoleClaims()
+    public void CreateAccessToken_NeverEmbedsRoleClaimsEvenWhenUserHasRoleAssignments()
+    {
+        var teacherRole = new Role { Id = 1, Name = RoleNames.Teacher, IsActive = true };
+        var adminRole = new Role { Id = 2, Name = RoleNames.PlatformAdmin, IsActive = true };
+        var user = new User { Email = "teacher@example.com", PasswordHash = "irrelevant" };
+        user.RoleAssignments.Add(new RoleAssignment
+        {
+            UserId = user.Id,
+            RoleId = teacherRole.Id,
+            Role = teacherRole,
+            InstitutionId = Guid.NewGuid(),
+            ValidFrom = new DateOnly(2026, 9, 1)
+        });
+        user.RoleAssignments.Add(new RoleAssignment
+        {
+            UserId = user.Id,
+            RoleId = adminRole.Id,
+            Role = adminRole,
+            InstitutionId = null,
+            ValidFrom = new DateOnly(2026, 9, 1)
+        });
+
+        var result = _tokenService.CreateAccessToken(user);
+        var token = Validate(result.Value);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(GetRoleClaims(token), Is.Empty);
+            Assert.That(
+                token.Claims.Select(claim => claim.Type),
+                Is.EquivalentTo([
+                    JwtRegisteredClaimNames.Sub,
+                    JwtRegisteredClaimNames.Jti,
+                    JwtRegisteredClaimNames.Iat,
+                    TokenClaimTypes.SecurityStamp,
+                    JwtRegisteredClaimNames.Exp,
+                    JwtRegisteredClaimNames.Iss,
+                    JwtRegisteredClaimNames.Aud
+                ]));
+        });
+    }
+
+    [Test]
+    public void CreateAccessToken_ReflectsRotatedSecurityStamp()
     {
         var user = new User { Email = "student@example.com", PasswordHash = "irrelevant" };
+        var initialStamp = user.SecurityStamp;
 
-        var result = _tokenService.CreateAccessToken(user, []);
+        var firstToken = Validate(_tokenService.CreateAccessToken(user).Value);
+        user.RotateSecurityStamp();
+        var secondToken = Validate(_tokenService.CreateAccessToken(user).Value);
 
-        Assert.That(GetRoleClaims(Validate(result.Value)), Is.Empty);
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                firstToken.Claims.Single(claim => claim.Type == TokenClaimTypes.SecurityStamp).Value,
+                Is.EqualTo(initialStamp));
+            Assert.That(
+                secondToken.Claims.Single(claim => claim.Type == TokenClaimTypes.SecurityStamp).Value,
+                Is.EqualTo(user.SecurityStamp));
+            Assert.That(user.SecurityStamp, Is.Not.EqualTo(initialStamp));
+        });
     }
 
     [Test]
@@ -137,7 +206,7 @@ public class TokenServiceTests
         });
     }
 
-    private JwtSecurityToken Validate(string accessToken)
+    private static JwtSecurityToken Validate(string accessToken, bool validateLifetime = true)
     {
         var validationParameters = new TokenValidationParameters
         {
@@ -147,7 +216,7 @@ public class TokenServiceTests
             ValidAudience = Settings.Audience,
             ValidateIssuerSigningKey = true,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Settings.SigningKey)),
-            ValidateLifetime = true,
+            ValidateLifetime = validateLifetime,
             ClockSkew = TimeSpan.FromSeconds(30)
         };
 
@@ -161,4 +230,9 @@ public class TokenServiceTests
         token.Claims
             .Where(claim => claim.Type is ClaimTypes.Role or "role")
             .Select(claim => claim.Value);
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
 }

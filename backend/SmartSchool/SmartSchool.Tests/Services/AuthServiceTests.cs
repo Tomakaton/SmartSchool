@@ -67,7 +67,11 @@ public class AuthServiceTests
                 Is.EqualTo(DateTime.UtcNow.AddMinutes(15)).Within(TimeSpan.FromMinutes(1)));
             Assert.That(response.RefreshTokenExpiresAt,
                 Is.EqualTo(DateTime.UtcNow.AddDays(7)).Within(TimeSpan.FromMinutes(1)));
-            Assert.That(GetRoleClaims(response.AccessToken), Is.EquivalentTo([ "Teacher" ]));
+            Assert.That(GetClaimValue(response.AccessToken, JwtRegisteredClaimNames.Sub),
+                Is.EqualTo(user.Id.ToString()));
+            Assert.That(GetClaimValue(response.AccessToken, TokenClaimTypes.SecurityStamp),
+                Is.EqualTo(user.SecurityStamp));
+            Assert.That(GetRoleClaims(response.AccessToken), Is.Empty);
         });
 
         var storedToken = await _dbContext.RefreshTokens.SingleAsync();
@@ -124,16 +128,22 @@ public class AuthServiceTests
     }
 
     [Test]
-    public async Task LoginAsync_ExcludesInactiveRolesFromAccessToken()
+    public async Task LoginAsync_DoesNotEmbedRoleClaimsInAccessToken()
     {
-        var activeRole = await AddRoleAsync(1, "Teacher");
-        var inactiveRole = await AddRoleAsync(2, "Admin", isActive: false);
-        await AddUserAsync("student@example.com", "Password123!", activeRole, inactiveRole);
+        var activeRole = await AddRoleAsync(1, RoleNames.Teacher);
+        var inactiveRole = await AddRoleAsync(2, RoleNames.InstitutionAdmin, isActive: false);
+        var user = await AddUserAsync("student@example.com", "Password123!", activeRole, inactiveRole);
 
         var result = await _authService.LoginAsync(new LoginRequest("student@example.com", "Password123!"));
 
         Assert.That(result.Succeeded, Is.True, result.Error);
-        Assert.That(GetRoleClaims(result.Value!.AccessToken), Is.EquivalentTo(new[] { "Teacher" }));
+        var accessToken = result.Value!.AccessToken;
+        Assert.Multiple(() =>
+        {
+            Assert.That(GetRoleClaims(accessToken), Is.Empty);
+            Assert.That(GetClaimValue(accessToken, TokenClaimTypes.SecurityStamp),
+                Is.EqualTo(user.SecurityStamp));
+        });
     }
 
     [Test]
@@ -170,7 +180,9 @@ public class AuthServiceTests
         {
             Assert.That(response.AccessToken, Is.Not.Empty);
             Assert.That(response.RefreshToken, Is.Not.EqualTo("old-refresh-token"));
-            Assert.That(GetRoleClaims(response.AccessToken), Is.EquivalentTo(new[] { "Teacher" }));
+            Assert.That(GetClaimValue(response.AccessToken, TokenClaimTypes.SecurityStamp),
+                Is.EqualTo(user.SecurityStamp));
+            Assert.That(GetRoleClaims(response.AccessToken), Is.Empty);
         });
 
         var tokens = await _dbContext.RefreshTokens.ToListAsync();
@@ -475,6 +487,13 @@ public class AuthServiceTests
 
         return refreshToken;
     }
+
+    private static string? GetClaimValue(string accessToken, string claimType) =>
+        new JwtSecurityTokenHandler()
+            .ReadJwtToken(accessToken)
+            .Claims
+            .SingleOrDefault(claim => claim.Type == claimType)
+            ?.Value;
 
     private static IEnumerable<string> GetRoleClaims(string accessToken) =>
         new JwtSecurityTokenHandler()

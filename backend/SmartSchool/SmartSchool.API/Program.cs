@@ -1,5 +1,4 @@
 using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
@@ -66,10 +65,9 @@ builder.Services
             ValidateLifetime = true,
             RequireExpirationTime = true,
             RequireSignedTokens = true,
-            // Access tokens are short-lived; allow only a small tolerance for clock differences.
+            // Access tokens are short-lived and carry identity + security stamp only (never roles).
             ClockSkew = TimeSpan.FromSeconds(30),
-            NameClaimType = JwtRegisteredClaimNames.Email,
-            RoleClaimType = ClaimTypes.Role
+            NameClaimType = JwtRegisteredClaimNames.Sub
         };
     });
 
