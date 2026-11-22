@@ -22,5 +22,5 @@ public sealed class JwtSettings
     public int AccessTokenExpiryMinutes { get; set; } = 15;
 
     /// <summary>Lifetime of issued refresh tokens, in days.</summary>
-    public int RefreshTokenExpiryDays { get; set; } = 7;
+    public int RefreshTokenExpiryDays { get; set; } = 30;
 }

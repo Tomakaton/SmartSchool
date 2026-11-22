@@ -1,5 +1,4 @@
 using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
@@ -16,6 +15,8 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 
 builder.Services.AddControllers();
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
@@ -40,10 +41,14 @@ if (Encoding.UTF8.GetByteCount(jwtSettings.SigningKey) < 32)
 
 builder.Services.Configure<JwtSettings>(
     builder.Configuration.GetSection(JwtSettings.SectionName));
+builder.Services.Configure<SeedSettings>(
+    builder.Configuration.GetSection(SeedSettings.SectionName));
 
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<DbSeeder>();
 
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -62,16 +67,29 @@ builder.Services
             ValidateLifetime = true,
             RequireExpirationTime = true,
             RequireSignedTokens = true,
-            // Access tokens are short-lived; allow only a small tolerance for clock differences.
+            // Access tokens are short-lived and carry identity + security stamp only (never roles).
             ClockSkew = TimeSpan.FromSeconds(30),
-            NameClaimType = JwtRegisteredClaimNames.Email,
-            RoleClaimType = ClaimTypes.Role
+            NameClaimType = JwtRegisteredClaimNames.Sub
+        };
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = JwtSecurityStampValidator.ValidateAsync
         };
     });
 
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
+
+// `dotnet run -- --seed` seeds roles and the platform admin, then exits without serving requests.
+if (args.Contains(DbSeeder.CommandLineFlag))
+{
+    using var scope = app.Services.CreateScope();
+    await scope.ServiceProvider.GetRequiredService<DbSeeder>().SeedAsync();
+    return;
+}
+
+app.UseExceptionHandler();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

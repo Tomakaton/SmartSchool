@@ -8,10 +8,11 @@ namespace SmartSchool.API.Services;
 public interface ITokenService
 {
     /// <summary>
-    /// Creates a signed JWT for the user, adding one role claim for each supplied role.
+    /// Creates a signed JWT carrying the user's identity and security stamp (<c>sub</c>,
+    /// <c>jti</c>, <c>iat</c>, <c>exp</c>, <c>stamp</c>). Authorization roles are never embedded.
     /// </summary>
     /// <returns>The serialized token and its UTC expiry.</returns>
-    AccessTokenResult CreateAccessToken(User user, IEnumerable<string> roles);
+    AccessTokenResult CreateAccessToken(User user);
 
     /// <summary>
     /// Creates a cryptographically random refresh token to hand back to the client.

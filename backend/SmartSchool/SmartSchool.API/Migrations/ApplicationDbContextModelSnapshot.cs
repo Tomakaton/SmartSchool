@@ -20,7 +20,53 @@ namespace SmartSchool.API.Migrations
                 .HasAnnotation("ProductVersion", "10.0.14")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
+            NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "citext");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("SmartSchool.API.Models.Institution", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Address")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTime>("DateCreated")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("TimeZoneId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name");
+
+                    b.ToTable("Institutions", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Institutions_Status", "\"Status\" IN ('ACTIVE', 'SUSPENDED', 'ARCHIVED')");
+                        });
+                });
 
             modelBuilder.Entity("SmartSchool.API.Models.RefreshToken", b =>
                 {
@@ -33,6 +79,9 @@ namespace SmartSchool.API.Migrations
 
                     b.Property<DateTime>("ExpiresAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("FamilyId")
+                        .HasColumnType("uuid");
 
                     b.Property<Guid?>("ReplacedByTokenId")
                         .HasColumnType("uuid");
@@ -48,6 +97,12 @@ namespace SmartSchool.API.Migrations
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.HasIndex("ReplacedByTokenId");
@@ -55,7 +110,9 @@ namespace SmartSchool.API.Migrations
                     b.HasIndex("TokenHash")
                         .IsUnique();
 
-                    b.HasIndex("UserId");
+                    b.HasIndex("FamilyId", "RevokedAt");
+
+                    b.HasIndex("UserId", "RevokedAt");
 
                     b.ToTable("RefreshTokens", (string)null);
                 });
@@ -88,22 +145,50 @@ namespace SmartSchool.API.Migrations
 
             modelBuilder.Entity("SmartSchool.API.Models.RoleAssignment", b =>
                 {
-                    b.Property<Guid>("UserId")
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid?>("InstitutionId")
                         .HasColumnType("uuid");
 
                     b.Property<long>("RoleId")
                         .HasColumnType("bigint");
 
-                    b.Property<DateTime>("AssignedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("timestamp with time zone")
-                        .HasDefaultValueSql("now()");
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
 
-                    b.HasKey("UserId", "RoleId");
+                    b.Property<DateOnly>("ValidFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("ValidTo")
+                        .HasColumnType("date");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstitutionId");
 
                     b.HasIndex("RoleId");
 
-                    b.ToTable("RoleAssignments", (string)null);
+                    b.HasIndex("UserId", "InstitutionId")
+                        .HasDatabaseName("IX_RoleAssignments_UserId_InstitutionId");
+
+                    b.HasIndex("UserId", "RoleId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_RoleAssignments_UserId_RoleId_Platform")
+                        .HasFilter("\"InstitutionId\" IS NULL AND \"ValidTo\" IS NULL");
+
+                    b.HasIndex("UserId", "RoleId", "InstitutionId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_RoleAssignments_UserId_RoleId_InstitutionId")
+                        .HasFilter("\"InstitutionId\" IS NOT NULL AND \"ValidTo\" IS NULL");
+
+                    b.ToTable("RoleAssignments", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_RoleAssignments_ValidDates", "\"ValidTo\" IS NULL OR \"ValidTo\" >= \"ValidFrom\"");
+                        });
                 });
 
             modelBuilder.Entity("SmartSchool.API.Models.User", b =>
@@ -120,12 +205,22 @@ namespace SmartSchool.API.Migrations
                     b.Property<string>("Email")
                         .IsRequired()
                         .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
+                        .HasColumnType("citext");
+
+                    b.Property<bool>("IsActivated")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
 
                     b.Property<string>("PasswordHash")
                         .IsRequired()
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)");
+
+                    b.Property<string>("SecurityStamp")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
 
                     b.HasKey("Id");
 
@@ -155,6 +250,11 @@ namespace SmartSchool.API.Migrations
 
             modelBuilder.Entity("SmartSchool.API.Models.RoleAssignment", b =>
                 {
+                    b.HasOne("SmartSchool.API.Models.Institution", "Institution")
+                        .WithMany()
+                        .HasForeignKey("InstitutionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("SmartSchool.API.Models.Role", "Role")
                         .WithMany("RoleAssignments")
                         .HasForeignKey("RoleId")
@@ -166,6 +266,8 @@ namespace SmartSchool.API.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("Institution");
 
                     b.Navigation("Role");
 

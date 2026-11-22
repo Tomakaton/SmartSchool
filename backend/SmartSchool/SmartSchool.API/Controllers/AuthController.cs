@@ -3,6 +3,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SmartSchool.API.Contracts.Auth;
+using SmartSchool.API.Contracts.Common;
 using SmartSchool.API.Services;
 
 namespace SmartSchool.API.Controllers;
@@ -24,7 +25,7 @@ public class AuthController(IAuthService authService) : ControllerBase
 
         if (!result.Succeeded)
         {
-            return Unauthorized(new { message = result.Error });
+            return FailureProblem(result.Error, result.ErrorKind);
         }
 
         return Ok(result.Value);
@@ -40,10 +41,10 @@ public class AuthController(IAuthService authService) : ControllerBase
         CancellationToken cancellationToken)
     {
         var result = await authService.RefreshTokenAsync(request, cancellationToken);
-  
+
         if (!result.Succeeded)
         {
-            return Unauthorized(new { message = result.Error });
+            return FailureProblem(result.Error, result.ErrorKind);
         }
 
         return Ok(result.Value);
@@ -61,16 +62,30 @@ public class AuthController(IAuthService authService) : ControllerBase
 
         if (!Guid.TryParse(userIdClaim, out var userId))
         {
-            return Unauthorized(new { message = "Invalid access token." });
+            return FailureProblem("Invalid access token.", ResultErrorKind.Unauthorized);
         }
 
         var result = await authService.ChangePasswordAsync(userId, request, cancellationToken);
 
         if (!result.Succeeded)
         {
-            return BadRequest(new { message = result.Error });
+            return FailureProblem(result.Error, result.ErrorKind);
         }
 
         return NoContent();
+    }
+
+    private ObjectResult FailureProblem(string? detail, ResultErrorKind errorKind)
+    {
+        var (statusCode, title) = errorKind switch
+        {
+            ResultErrorKind.Unauthorized => (StatusCodes.Status401Unauthorized, "Unauthorized."),
+            ResultErrorKind.Forbidden => (StatusCodes.Status403Forbidden, "Forbidden."),
+            ResultErrorKind.NotFound => (StatusCodes.Status404NotFound, "Not found."),
+            ResultErrorKind.Conflict => (StatusCodes.Status409Conflict, "Conflict."),
+            _ => (StatusCodes.Status422UnprocessableEntity, "Unprocessable entity.")
+        };
+
+        return Problem(detail: detail, statusCode: statusCode, title: title);
     }
 }

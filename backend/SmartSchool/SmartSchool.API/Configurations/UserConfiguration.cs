@@ -14,6 +14,7 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
 
         builder.Property(user => user.Email)
             .IsRequired()
+            .HasColumnType("citext")
             .HasMaxLength(256);
 
         builder.HasIndex(user => user.Email)
@@ -22,6 +23,14 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(user => user.PasswordHash)
             .IsRequired()
             .HasMaxLength(512);
+
+        builder.Property(user => user.IsActivated)
+            .IsRequired()
+            .HasDefaultValue(false);
+
+        builder.Property(user => user.SecurityStamp)
+            .IsRequired()
+            .HasMaxLength(64);
 
         builder.Property(user => user.DateCreated)
             .IsRequired()

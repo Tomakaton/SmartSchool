@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -14,21 +15,29 @@ namespace SmartSchool.API.Services;
 /// Creates signed JWT access tokens and opaque refresh tokens, and hashes refresh tokens
 /// so only the digest is persisted.
 /// </summary>
-public class TokenService(IOptions<JwtSettings> jwtSettings) : ITokenService
+public class TokenService(
+    IOptions<JwtSettings> jwtSettings,
+    TimeProvider? timeProvider = null) : ITokenService
 {
     private readonly JwtSettings _jwtSettings = jwtSettings.Value;
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     /// <inheritdoc />
-    public AccessTokenResult CreateAccessToken(User user, IEnumerable<string> roles)
+    public AccessTokenResult CreateAccessToken(User user)
     {
-        var expiresAt = DateTime.UtcNow.AddMinutes(_jwtSettings.AccessTokenExpiryMinutes);
+        var issuedAt = _timeProvider.GetUtcNow().UtcDateTime;
+        var expiresAt = issuedAt.AddMinutes(_jwtSettings.AccessTokenExpiryMinutes);
 
+        // Tokens carry identity and revocation state only; authorization resolves roles per request.
         List<Claim> claims =
         [
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
-            new(JwtRegisteredClaimNames.Email, user.Email),
             new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            .. roles.Select(role => new Claim(ClaimTypes.Role, role))
+            new(
+                JwtRegisteredClaimNames.Iat,
+                EpochTime.GetIntDate(issuedAt).ToString(CultureInfo.InvariantCulture),
+                ClaimValueTypes.Integer64),
+            new(TokenClaimTypes.SecurityStamp, user.SecurityStamp)
         ];
 
         var signingCredentials = new SigningCredentials(

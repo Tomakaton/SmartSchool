@@ -1,8 +1,7 @@
 ﻿# SmartSchool API
 
 Backend for the SmartSchool application. It currently provides the authentication foundation:
-user registration, JWT login, refresh-token rotation, password changes, and role-aware access
-tokens on top of PostgreSQL.
+JWT login, refresh-token rotation, and password changes on top of PostgreSQL.
 
 ## Stack
 
@@ -61,7 +60,9 @@ dotnet user-secrets set "Jwt:SigningKey" "<at-least-32-bytes-of-random-text>" --
 | `Jwt:Issuer` | No | `SmartSchool.API` | Written to and required from access tokens |
 | `Jwt:Audience` | No | `SmartSchool.Client` | Written to and required from access tokens |
 | `Jwt:AccessTokenExpiryMinutes` | No | `15` | Access token lifetime |
-| `Jwt:RefreshTokenExpiryDays` | No | `7` | Refresh token lifetime |
+| `Jwt:RefreshTokenExpiryDays` | No | `30` | Refresh token lifetime |
+| `Seed:PlatformAdmin:Email` | For `--seed` | – | Email of the platform admin created by the seeder |
+| `Seed:PlatformAdmin:Password` | For `--seed` | – | Initial password (min. 12 chars); never overwrites an existing account |
 
 For CI or containers, use environment variables with a double underscore, for example
 `ConnectionStrings__DefaultConnection` and `Jwt__SigningKey`.
@@ -73,6 +74,9 @@ cd backend/SmartSchool
 
 # Create/update the database schema
 dotnet ef database update --project SmartSchool.API
+
+# Seed roles and the platform admin (idempotent; exits without starting the server)
+dotnet run --project SmartSchool.API -- --seed
 
 # Start the API (http profile, http://localhost:5220)
 dotnet run --project SmartSchool.API
@@ -88,34 +92,33 @@ In Development the OpenAPI document is served at `/openapi/v1.json` and the Scal
 
 | Method | Route | Auth | Request | Success | Failures |
 | --- | --- | --- | --- | --- | --- |
-| POST | `/api/auth/login` | Anonymous | `LoginRequest` | `200` `LoginResponse` | `400` validation, `401` invalid credentials |
-| POST | `/api/auth/refresh` | Anonymous | `RefreshTokenRequest` | `200` `RefreshTokenResponse` | `400` validation, `401` invalid/expired token |
-| POST | `/api/auth/change-password` | Bearer | `ChangePasswordRequest` | `204` | `400` wrong current password, `401` invalid access token |
-| POST | `/api/register` | Anonymous | `RegisterRequest` | `201` `RegisterResponse` | `400` validation, `409` duplicate email |
+| POST | `/api/auth/login` | Anonymous | `LoginRequest` | `200` `LoginResponse` | `400` validation, `401` invalid credentials, `403` pending activation |
+| POST | `/api/auth/refresh` | Anonymous | `RefreshTokenRequest` | `200` `RefreshTokenResponse` | `400` validation, `401` invalid/expired/reused token |
+| POST | `/api/auth/change-password` | Bearer | `ChangePasswordRequest` | `204` | `400` validation, `401` wrong current password or invalid access token, `422` new password matches current |
 
-`POST /api/register` is a **temporary** endpoint used to create users until a proper user
-management flow exists. It is anonymous, unverified, and should not ship to production as-is.
-
-Error responses come in two shapes today:
-
-- Model-validation failures produce ASP.NET Core `ProblemDetails` with an `errors` dictionary.
-- Service-level failures produce `{ "message": "..." }`.
+Error responses use RFC 7807 `ProblemDetails` across both validation failures and service-level or
+unhandled errors.
 
 Login failures deliberately return the same message for an unknown email and a wrong password to
 avoid disclosing which accounts exist.
 
 ## Authentication model
 
-- **Access token**: signed JWT, 15 minutes by default. Contains `sub` (user id), `email`, `jti`,
-  and one role claim per *active* role assignment (issued with the `ClaimTypes.Role` claim type).
-- **Refresh token**: random 512-bit value, 7 days by default. Only its SHA-256 hex digest is
+- **Access token**: signed JWT, 15 minutes by default. Carries identity and revocation state only:
+  `sub` (user id), `jti`, `iat`, `exp`, and `stamp` (the user's security stamp). `OnTokenValidated`
+  checks `stamp` and `IsActivated` against the database on each authenticated request so rotating
+  the stamp invalidates issued access tokens immediately. Authorization roles are resolved
+  server-side per request and are never embedded in token claims.
+- **Refresh token**: random 512-bit value, 30 days by default. Only its SHA-256 hex digest is
   persisted; the raw value is returned to the client once.
-- **Rotation**: refreshing revokes the presented token, stores the replacement, and links the two
-  through `ReplacedByTokenId`. A revoked or expired token is rejected.
-- **Password change**: re-hashes the password and revokes every non-revoked refresh token for that
-  user, ending other sessions.
-- **Emails**: login and registration compare emails case-insensitively and trim surrounding
-  whitespace.
+- **Rotation**: refreshing revokes the presented token, stores the replacement within the same
+  `FamilyId`, and links the two through `ReplacedByTokenId`. Replaying an already-rotated token
+  revokes every active token in that `FamilyId` and returns `401`. Concurrent refresh races are
+  guarded by PostgreSQL's `xmin` row-version concurrency token.
+- **Password change**: re-hashes the password, rotates `SecurityStamp` (immediately invalidating
+  issued access tokens), and revokes every non-revoked refresh token for that user.
+- **Emails**: `Users.Email` uses PostgreSQL `citext` with a unique index, and login trims
+  surrounding whitespace.
 
 ## Tests
 
@@ -126,18 +129,17 @@ dotnet test
 
 The suite runs entirely in memory; no database, Docker, or network access is required. It covers:
 
-- `AuthService`: login outcomes, email matching, role filtering, refresh-token rotation/revocation,
-  password changes.
+- `AuthService`: login outcomes, email matching, activation checks, refresh-token rotation/revocation,
+  password changes, and security-stamp rotation.
 - `TokenService`: JWT claims/expiry/signature, refresh-token generation, SHA-256 hashing.
-- Auth request validation: required fields, email format, and the 8-character password minimum.
+- Auth request validation: required fields, email format, and the 12-character password minimum.
 
 Notes:
 
 - The validation tests validate the record constructor parameters the same way MVC does. Record
   models must keep their validation attributes on the parameters (`[param: ...]`); moving them to
   properties (`[property: ...]`) makes MVC throw at request time.
-- `RegisterController` is intentionally untested because it is temporary.
-- EF InMemory does not exercise PostgreSQL-specific SQL, indexes, or collations, so an integration
+- EF InMemory does not exercise PostgreSQL-specific SQL, indexes, or `citext`, so an integration
   test against a real PostgreSQL instance is still worth adding.
 
 ## Migrations
@@ -152,8 +154,4 @@ dotnet ef database update --project SmartSchool.API
 ## Known limitations / next steps
 
 - No background job removes expired or revoked refresh tokens.
-- Refresh-token reuse is not detected; replaying an old token cannot revoke its rotation chain.
 - No email verification, password reset, or role management API yet.
-- The unique index on `Users.Email` is case-sensitive while login/registration are case-insensitive,
-  so concurrent registration of the same address in different casing can surface as a `500`.
-- Password rules are only "at least 8 characters" on registration and password change.

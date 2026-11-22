@@ -26,20 +26,31 @@ public class AuthService(
         LoginRequest request,
         CancellationToken cancellationToken = default)
     {
-        // Compare lowercased values instead of using EF.Functions.ILike: ILike is Npgsql-only
-        // (unit tests run on EF InMemory) and treats the input as a LIKE pattern, so '%' and '_'
-        // in an email would act as wildcards. This does not use the Email index; add a functional
-        // index on lower("Email") if email lookups become a bottleneck.
         var email = request.Identifier.Trim().ToLowerInvariant();
 
-        var user = await dbContext.Users
-            .Include(user => user.RoleAssignments)
-            .ThenInclude(roleAssignment => roleAssignment.Role)
-            .FirstOrDefaultAsync(user => user.Email.ToLower() == email, cancellationToken);
+        // PostgreSQL stores Email as citext, so direct equality uses IX_Users_Email case-insensitively.
+        // EF InMemory does not support citext, so unit tests fall back to ToLower().
+        var user = dbContext.Database.IsNpgsql()
+            ? await dbContext.Users.FirstOrDefaultAsync(user => user.Email == email, cancellationToken)
+            : await dbContext.Users.FirstOrDefaultAsync(
+                user => user.Email.ToLower() == email,
+                cancellationToken);
 
         if (user is null)
         {
-            return Result<LoginResponse>.Failure("Invalid email or password.");
+            return Result<LoginResponse>.Failure(
+                "Invalid email or password.",
+                ResultErrorKind.Unauthorized);
+        }
+
+        // Provisioned accounts that have not consumed a magic link yet have an empty PasswordHash;
+        // surface 403 immediately so the client can direct them to their activation email. Accounts
+        // that do hold a password hash verify the password first so wrong-password probes still get 401.
+        if (!user.IsActivated && string.IsNullOrEmpty(user.PasswordHash))
+        {
+            return Result<LoginResponse>.Failure(
+                "Account has not been activated.",
+                ResultErrorKind.Forbidden);
         }
 
         var verificationResult = passwordHasher.VerifyHashedPassword(
@@ -50,17 +61,31 @@ public class AuthService(
         switch (verificationResult)
         {
             case PasswordVerificationResult.Failed:
-                return Result<LoginResponse>.Failure("Invalid email or password.");
+                return Result<LoginResponse>.Failure(
+                    "Invalid email or password.",
+                    ResultErrorKind.Unauthorized);
             case PasswordVerificationResult.SuccessRehashNeeded:
-                user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
+                if (user.IsActivated)
+                {
+                    user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
+                }
                 break;
             case PasswordVerificationResult.Success:
                 break;
             default:
-                return Result<LoginResponse>.Failure("Invalid login attempt.");
+                return Result<LoginResponse>.Failure(
+                    "Invalid login attempt.",
+                    ResultErrorKind.Unauthorized);
         }
 
-        var accessToken = CreateAccessToken(user);
+        if (!user.IsActivated)
+        {
+            return Result<LoginResponse>.Failure(
+                "Account has not been activated.",
+                ResultErrorKind.Forbidden);
+        }
+
+        var accessToken = tokenService.CreateAccessToken(user);
         var refreshToken = CreateRefreshToken(user);
 
         dbContext.RefreshTokens.Add(refreshToken.Entity);
@@ -83,22 +108,40 @@ public class AuthService(
 
         var storedToken = await dbContext.RefreshTokens
             .Include(refreshToken => refreshToken.User)
-            .ThenInclude(user => user.RoleAssignments)
-            .ThenInclude(roleAssignment => roleAssignment.Role)
             .FirstOrDefaultAsync(
                 refreshToken => refreshToken.TokenHash == tokenHash,
                 cancellationToken);
 
-        if (storedToken is null
-            || storedToken.RevokedAt is not null
-            || storedToken.ExpiresAt <= DateTime.UtcNow)
+        if (storedToken is null)
         {
-            return Result<RefreshTokenResponse>.Failure("Invalid or expired refresh token.");
+            return Result<RefreshTokenResponse>.Failure(
+                "Invalid or expired refresh token.",
+                ResultErrorKind.Unauthorized);
+        }
+
+        // Reuse detection: presenting a token that was already rotated means either the token was
+        // stolen or an old copy was replayed. Revoke every active token in this family immediately.
+        if (storedToken.ReplacedByTokenId is not null)
+        {
+            await RevokeFamilyAsync(storedToken.FamilyId, cancellationToken);
+
+            return Result<RefreshTokenResponse>.Failure(
+                "Invalid or expired refresh token.",
+                ResultErrorKind.Unauthorized);
+        }
+
+        if (storedToken.RevokedAt is not null
+            || storedToken.ExpiresAt <= DateTime.UtcNow
+            || !storedToken.User.IsActivated)
+        {
+            return Result<RefreshTokenResponse>.Failure(
+                "Invalid or expired refresh token.",
+                ResultErrorKind.Unauthorized);
         }
 
         var user = storedToken.User;
-        var accessToken = CreateAccessToken(user);
-        var refreshToken = CreateRefreshToken(user);
+        var accessToken = tokenService.CreateAccessToken(user);
+        var refreshToken = CreateRefreshToken(user, storedToken.FamilyId);
 
         // Single-use rotation: revoke the token that was presented and link it to its replacement.
         storedToken.RevokedAt = DateTime.UtcNow;
@@ -106,7 +149,17 @@ public class AuthService(
 
         dbContext.RefreshTokens.Add(refreshToken.Entity);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // A concurrent request already rotated or revoked this token; fail closed.
+            return Result<RefreshTokenResponse>.Failure(
+                "Invalid or expired refresh token.",
+                ResultErrorKind.Unauthorized);
+        }
 
         return Result<RefreshTokenResponse>.Success(new RefreshTokenResponse(
             accessToken.Value,
@@ -126,7 +179,7 @@ public class AuthService(
 
         if (user is null)
         {
-            return Result.Failure("User was not found.");
+            return Result.Failure("User was not found.", ResultErrorKind.Unauthorized);
         }
 
         var verificationResult = passwordHasher.VerifyHashedPassword(
@@ -136,10 +189,18 @@ public class AuthService(
 
         if (verificationResult == PasswordVerificationResult.Failed)
         {
-            return Result.Failure("Current password is incorrect.");
+            return Result.Failure("Current password is incorrect.", ResultErrorKind.Unauthorized);
+        }
+
+        if (request.NewPassword == request.CurrentPassword)
+        {
+            return Result.Failure(
+                "New password must be different from the current password.",
+                ResultErrorKind.Validation);
         }
 
         user.PasswordHash = passwordHasher.HashPassword(user, request.NewPassword);
+        user.RotateSecurityStamp();
 
         // Revoke every token that has not been revoked yet. This includes expired tokens because
         // the filter only checks RevokedAt.
@@ -159,23 +220,35 @@ public class AuthService(
         return Result.Success();
     }
 
-    private AccessTokenResult CreateAccessToken(User user)
+    private async Task RevokeFamilyAsync(Guid familyId, CancellationToken cancellationToken)
     {
-        // Only active roles are embedded; changing a role takes effect the next time a token is issued.
-        var roles = user.RoleAssignments
-            .Where(roleAssignment => roleAssignment.Role.IsActive)
-            .Select(roleAssignment => roleAssignment.Role.Name);
+        var activeFamilyTokens = await dbContext.RefreshTokens
+            .Where(refreshToken => refreshToken.FamilyId == familyId && refreshToken.RevokedAt == null)
+            .ToListAsync(cancellationToken);
 
-        return tokenService.CreateAccessToken(user, roles);
+        if (activeFamilyTokens.Count == 0)
+        {
+            return;
+        }
+
+        var revokedAt = DateTime.UtcNow;
+
+        foreach (var familyToken in activeFamilyTokens)
+        {
+            familyToken.RevokedAt = revokedAt;
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
     }
 
-    private IssuedRefreshToken CreateRefreshToken(User user)
+    private IssuedRefreshToken CreateRefreshToken(User user, Guid? familyId = null)
     {
         var token = tokenService.CreateRefreshToken();
 
         var entity = new RefreshToken
         {
             UserId = user.Id,
+            FamilyId = familyId ?? Guid.NewGuid(),
             TokenHash = tokenService.HashRefreshToken(token),
             CreatedAt = DateTime.UtcNow,
             ExpiresAt = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpiryDays)
