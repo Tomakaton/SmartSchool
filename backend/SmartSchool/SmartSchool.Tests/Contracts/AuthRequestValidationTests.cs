@@ -80,9 +80,9 @@ public class AuthRequestValidationTests
 
     [TestCase("")]
     [TestCase("short")]
-    [TestCase("1234567")]
+    [TestCase("12345678901")]
     [TestCase("   a   ")]
-    public void ChangePasswordRequest_WithNewPasswordShorterThan8Characters_FailsValidation(string newPassword)
+    public void ChangePasswordRequest_WithNewPasswordShorterThan12Characters_FailsValidation(string newPassword)
     {
         AssertInvalid(
             new ChangePasswordRequest("OldPassword123!", newPassword),
@@ -98,9 +98,9 @@ public class AuthRequestValidationTests
     }
 
     [Test]
-    public void ChangePasswordRequest_WithNewPasswordOfExactly8Characters_HasNoValidationErrors()
+    public void ChangePasswordRequest_WithNewPasswordOfExactly12Characters_HasNoValidationErrors()
     {
-        var request = new ChangePasswordRequest("OldPassword123!", "12345678");
+        var request = new ChangePasswordRequest("OldPassword123!", "123456789012");
 
         Assert.That(Validate(request), Is.Empty);
     }

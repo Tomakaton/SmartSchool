@@ -397,6 +397,7 @@ public class AuthServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.ErrorKind, Is.EqualTo(ResultErrorKind.Unauthorized));
             Assert.That(result.Error, Is.EqualTo("Current password is incorrect."));
         });
 
@@ -503,7 +504,27 @@ public class AuthServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.ErrorKind, Is.EqualTo(ResultErrorKind.Unauthorized));
             Assert.That(result.Error, Is.EqualTo("User was not found."));
+        });
+    }
+
+    [Test]
+    public async Task ChangePasswordAsync_WhenNewPasswordMatchesCurrentPassword_ReturnsValidationFailure()
+    {
+        var user = await AddUserAsync("student@example.com", "SamePassword123!");
+        var initialStamp = user.SecurityStamp;
+
+        var result = await _authService.ChangePasswordAsync(
+            user.Id,
+            new ChangePasswordRequest("SamePassword123!", "SamePassword123!"));
+
+        var storedUser = await _dbContext.Users.SingleAsync(stored => stored.Id == user.Id);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.ErrorKind, Is.EqualTo(ResultErrorKind.Validation));
+            Assert.That(storedUser.SecurityStamp, Is.EqualTo(initialStamp));
         });
     }
 

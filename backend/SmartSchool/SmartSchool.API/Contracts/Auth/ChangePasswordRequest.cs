@@ -4,4 +4,4 @@ namespace SmartSchool.API.Contracts.Auth;
 
 public sealed record ChangePasswordRequest(
     [param: Required] string CurrentPassword,
-    [param: Required, MinLength(8)] string NewPassword);
+    [param: Required, MinLength(12)] string NewPassword);

@@ -26,14 +26,15 @@ public class AuthService(
         LoginRequest request,
         CancellationToken cancellationToken = default)
     {
-        // Compare lowercased values instead of using EF.Functions.ILike: ILike is Npgsql-only
-        // (unit tests run on EF InMemory) and treats the input as a LIKE pattern, so '%' and '_'
-        // in an email would act as wildcards. This does not use the Email index; add a functional
-        // index on lower("Email") if email lookups become a bottleneck.
         var email = request.Identifier.Trim().ToLowerInvariant();
 
-        var user = await dbContext.Users
-            .FirstOrDefaultAsync(user => user.Email.ToLower() == email, cancellationToken);
+        // PostgreSQL stores Email as citext, so direct equality uses IX_Users_Email case-insensitively.
+        // EF InMemory does not support citext, so unit tests fall back to ToLower().
+        var user = dbContext.Database.IsNpgsql()
+            ? await dbContext.Users.FirstOrDefaultAsync(user => user.Email == email, cancellationToken)
+            : await dbContext.Users.FirstOrDefaultAsync(
+                user => user.Email.ToLower() == email,
+                cancellationToken);
 
         if (user is null)
         {
@@ -178,7 +179,7 @@ public class AuthService(
 
         if (user is null)
         {
-            return Result.Failure("User was not found.");
+            return Result.Failure("User was not found.", ResultErrorKind.Unauthorized);
         }
 
         var verificationResult = passwordHasher.VerifyHashedPassword(
@@ -188,7 +189,14 @@ public class AuthService(
 
         if (verificationResult == PasswordVerificationResult.Failed)
         {
-            return Result.Failure("Current password is incorrect.");
+            return Result.Failure("Current password is incorrect.", ResultErrorKind.Unauthorized);
+        }
+
+        if (request.NewPassword == request.CurrentPassword)
+        {
+            return Result.Failure(
+                "New password must be different from the current password.",
+                ResultErrorKind.Validation);
         }
 
         user.PasswordHash = passwordHasher.HashPassword(user, request.NewPassword);

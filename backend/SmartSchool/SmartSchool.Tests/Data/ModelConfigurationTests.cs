@@ -133,4 +133,14 @@ public class ModelConfigurationTests
                 Has.Some.EqualTo(new[] { nameof(RefreshToken.FamilyId), nameof(RefreshToken.RevokedAt) }));
         });
     }
+
+    [Test]
+    public void UserEmail_IsConfiguredAsCitext()
+    {
+        var emailProperty = _dbContext.GetService<IDesignTimeModel>().Model
+            .FindEntityType(typeof(User))!
+            .FindProperty(nameof(User.Email))!;
+
+        Assert.That(emailProperty[RelationalAnnotationNames.ColumnType], Is.EqualTo("citext"));
+    }
 }
